@@ -68,10 +68,19 @@ jobs:
       - name: Apply Bookinfo
         run: |
           kubectl apply -f manifests/bookinfo.yaml
-          kubectl wait --for=condition=Ready pod -l app=productpage --timeout=180s
-          kubectl wait --for=condition=Ready pod -l app=details     --timeout=180s
-          kubectl wait --for=condition=Ready pod -l app=reviews     --timeout=180s
-          kubectl wait --for=condition=Ready pod -l app=ratings     --timeout=180s
+
+          # Wait for the pods to be *created* before running kubectl wait.
+          # kubectl wait fails immediately if no pods match the label.
+          for app in productpage details reviews ratings; do
+            echo "▶ waiting for pods with app=$app to exist..."
+            for i in $(seq 1 30); do
+              if kubectl get pods -l "app=$app" --no-headers 2>/dev/null | grep -q .; then
+                break
+              fi
+              sleep 2
+            done
+            kubectl wait --for=condition=Ready pod -l "app=$app" --timeout=180s
+          done
 
       - name: Enroll namespace in ambient mode
         run: kubectl label namespace default istio.io/dataplane-mode=ambient --overwrite
