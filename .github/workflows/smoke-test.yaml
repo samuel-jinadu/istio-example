@@ -60,7 +60,7 @@ jobs:
             --set values.cni.cniConfDir=/var/lib/rancher/k3s/agent/etc/cni/net.d \
             --set values.cni.cniBinDir=/bin \
             --skip-confirmation \
-            --timeout 10m
+            --readiness-timeout 10m
 
           # Give ztunnel a smaller footprint so it fits on the CI runner
           kubectl -n istio-system patch daemonset ztunnel --type=strategic -p '{
