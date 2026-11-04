@@ -59,8 +59,7 @@ jobs:
           istioctl install --set profile=ambient \
             --set values.cni.cniConfDir=/var/lib/rancher/k3s/agent/etc/cni/net.d \
             --set values.cni.cniBinDir=/var/lib/rancher/k3s/data/cni \
-            --skip-confirmation \
-            --readiness-timeout 10m
+            --skip-confirmation
 
           kubectl -n istio-system rollout status deployment/istiod   --timeout=180s
           kubectl -n istio-system rollout status daemonset/istio-cni-node --timeout=180s
@@ -114,13 +113,18 @@ jobs:
         run: |
           echo "▶ ztunnel workload list:"
           istioctl ztunnel-config workloads
-          COUNT=$(istioctl ztunnel-config workloads -o json | jq '[.workloads[] | select(.namespace=="default")] | length')
-          echo "workloads in default namespace: $COUNT"
+
+          # Count only workloads in 'default' whose protocol is HBONE (i.e. actually
+          # enrolled in ambient and proxied by ztunnel). The header row is NR=1.
+          COUNT=$(istioctl ztunnel-config workloads \
+                    | awk 'NR>1 && $1=="default" && $NF=="HBONE" {c++} END {print c+0}')
+
+          echo "HBONE workloads in default namespace: $COUNT"
           if [ "${COUNT:-0}" -lt 4 ]; then
-            echo "❌ expected at least 4 ambient-enrolled workloads"
+            echo "❌ expected at least 4 ambient-enrolled (HBONE) workloads in 'default'"
             exit 1
           fi
-          echo "✅ ztunnel sees the Bookinfo workloads"
+          echo "✅ ztunnel is proxying the Bookinfo workloads over HBONE"
 
       - name: Dump diagnostics on failure
         if: failure()
