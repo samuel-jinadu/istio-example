@@ -1,0 +1,124 @@
+name: Istio Ambient Smoke Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "istio/**"
+  pull_request:
+    paths:
+      - "istio/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: istio
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k3d
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d version
+
+      - name: Install istioctl
+        run: |
+          ISTIO_VERSION="1.30.0"
+          curl -sL "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istio-${ISTIO_VERSION}-linux-amd64.tar.gz" -o /tmp/istio.tar.gz
+          tar -xzf /tmp/istio.tar.gz -C /tmp
+          sudo mv "/tmp/istio-${ISTIO_VERSION}" /opt/istio
+          sudo ln -sf /opt/istio/bin/istioctl /usr/local/bin/istioctl
+          istioctl version --remote=false
+
+      - name: Create k3d cluster (Traefik disabled)
+        run: |
+          k3d cluster create istio-smoke \
+            --api-port 6550 \
+            -p '9080:80@loadbalancer' \
+            -p '9443:443@loadbalancer' \
+            --agents 2 \
+            --k3s-arg '--disable=traefik@server:*' \
+            --wait
+          kubectl wait --for=condition=Ready nodes --all --timeout=120s
+
+      - name: Install Gateway API CRDs (experimental)
+        run: |
+          kubectl apply --server-side -f \
+            https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.0/experimental-install.yaml
+
+      - name: Install Istio ambient (k3d CNI overrides)
+        run: |
+          istioctl install --set profile=ambient \
+            --set values.cni.cniConfDir=/var/lib/rancher/k3s/agent/etc/cni/net.d \
+            --set values.cni.cniBinDir=/bin \
+            --skip-confirmation
+          kubectl -n istio-system rollout status deployment/istiod --timeout=180s
+          kubectl -n istio-system rollout status daemonset/ztunnel --timeout=180s
+          kubectl -n istio-system rollout status daemonset/istio-cni-node --timeout=180s
+
+      - name: Apply Bookinfo
+        run: |
+          kubectl apply -f manifests/bookinfo.yaml
+          kubectl wait --for=condition=Ready pod -l app=productpage --timeout=120s
+          kubectl wait --for=condition=Ready pod -l app=details     --timeout=120s
+          kubectl wait --for=condition=Ready pod -l app=reviews     --timeout=120s
+          kubectl wait --for=condition=Ready pod -l app=ratings     --timeout=120s
+
+      - name: Enroll namespace in ambient mode
+        run: kubectl label namespace default istio.io/dataplane-mode=ambient
+
+      - name: Apply gateway and waypoint
+        run: |
+          kubectl apply -f manifests/bookinfo-gateway.yaml
+          kubectl apply -f manifests/waypoint.yaml
+          kubectl label namespace default istio.io/use-waypoint=waypoint --overwrite
+          kubectl wait --for=condition=Programmed gateway/bookinfo-gateway --timeout=180s
+
+      - name: Wait for ingress Service
+        run: |
+          for i in $(seq 1 30); do
+            if kubectl get svc bookinfo-gateway-istio >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          kubectl get svc bookinfo-gateway-istio
+
+      - name: Assert Bookinfo is reachable through the gateway
+        run: |
+          kubectl port-forward svc/bookinfo-gateway-istio 8080:80 >/tmp/pf.log 2>&1 &
+          PF_PID=$!
+          trap "kill $PF_PID 2>/dev/null || true" EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/productpage | grep -qi "Bookinfo"; then
+              echo "✅ Bookinfo reachable through Gateway API"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "❌ Bookinfo not reachable"
+          curl -sv http://localhost:8080/productpage || true
+          exit 1
+
+      - name: Assert ztunnel has intercepted the workloads
+        run: |
+          echo "▶ ztunnel workload list:"
+          istioctl ztunnel-config workloads
+          COUNT=$(istioctl ztunnel-config workloads -o json | jq '[.workloads[] | select(.namespace=="default")] | length')
+          echo "workloads in default namespace: $COUNT"
+          if [ "${COUNT:-0}" -lt 4 ]; then
+            echo "❌ expected at least 4 ambient-enrolled workloads"
+            exit 1
+          fi
+          echo "✅ ztunnel sees the Bookinfo workloads"
+
+      - name: Cleanup
+        if: always()
+        run: k3d cluster delete istio-smoke

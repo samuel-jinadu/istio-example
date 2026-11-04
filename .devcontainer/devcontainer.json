@@ -1,0 +1,36 @@
+{
+  "name": "Istio Ambient Mesh (k3d)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true
+    },
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "helm": "latest",
+      "minikube": "none"
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/scripts/install.sh",
+  "postStartCommand": "bash .devcontainer/scripts/start-cluster.sh",
+
+  "forwardPorts": [9080, 9443, 20001, 9090],
+  "portsAttributes": {
+    "9080": { "label": "Bookinfo HTTP", "onAutoForward": "notify" },
+    "9443": { "label": "Bookinfo HTTPS", "onAutoForward": "silent" },
+    "20001": { "label": "Kiali", "onAutoForward": "notify" },
+    "9090": { "label": "Prometheus", "onAutoForward": "silent" }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "redhat.vscode-yaml"
+      ]
+    }
+  }
+}
