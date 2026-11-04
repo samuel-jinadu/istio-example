@@ -54,30 +54,13 @@ jobs:
           kubectl apply --server-side -f \
             https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.0/experimental-install.yaml
 
-      - name: Install Istio ambient (k3d CNI overrides + extended timeout)
+      - name: Install Istio ambient (k3d CNI overrides)
         run: |
           istioctl install --set profile=ambient \
             --set values.cni.cniConfDir=/var/lib/rancher/k3s/agent/etc/cni/net.d \
             --set values.cni.cniBinDir=/var/lib/rancher/k3s/data/cni \
             --skip-confirmation \
             --readiness-timeout 10m
-
-          # Give ztunnel a smaller footprint so it fits on the CI runner
-          kubectl -n istio-system patch daemonset ztunnel --type=strategic -p '{
-            "spec": {
-              "template": {
-                "spec": {
-                  "containers": [{
-                    "name": "ztunnel",
-                    "resources": {
-                      "requests": {"cpu": "100m", "memory": "256Mi"},
-                      "limits":   {"cpu": "500m", "memory": "512Mi"}
-                    }
-                  }]
-                }
-              }
-            }
-          }'
 
           kubectl -n istio-system rollout status deployment/istiod   --timeout=180s
           kubectl -n istio-system rollout status daemonset/istio-cni-node --timeout=180s
