@@ -4,10 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "istio/**"
+      - "manifests/**"
+      - ".devcontainer/**"
+      - ".github/workflows/smoke-test.yaml"
   pull_request:
     paths:
-      - "istio/**"
+      - "manifests/**"
+      - ".devcontainer/**"
+      - ".github/workflows/smoke-test.yaml"
   workflow_dispatch:
 
 permissions:
@@ -17,9 +21,7 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: istio
+    # No working-directory override — the repo root IS the Istio example.
     steps:
       - uses: actions/checkout@v4
 
