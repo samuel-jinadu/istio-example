@@ -20,8 +20,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    # No working-directory override — the repo root IS the Istio example.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -55,26 +54,45 @@ jobs:
           kubectl apply --server-side -f \
             https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.0/experimental-install.yaml
 
-      - name: Install Istio ambient (k3d CNI overrides)
+      - name: Install Istio ambient (k3d CNI overrides + extended timeout)
         run: |
           istioctl install --set profile=ambient \
             --set values.cni.cniConfDir=/var/lib/rancher/k3s/agent/etc/cni/net.d \
             --set values.cni.cniBinDir=/bin \
-            --skip-confirmation
-          kubectl -n istio-system rollout status deployment/istiod --timeout=180s
-          kubectl -n istio-system rollout status daemonset/ztunnel --timeout=180s
+            --skip-confirmation \
+            --timeout 10m
+
+          # Give ztunnel a smaller footprint so it fits on the CI runner
+          kubectl -n istio-system patch daemonset ztunnel --type=strategic -p '{
+            "spec": {
+              "template": {
+                "spec": {
+                  "containers": [{
+                    "name": "ztunnel",
+                    "resources": {
+                      "requests": {"cpu": "100m", "memory": "256Mi"},
+                      "limits":   {"cpu": "500m", "memory": "512Mi"}
+                    }
+                  }]
+                }
+              }
+            }
+          }'
+
+          kubectl -n istio-system rollout status deployment/istiod   --timeout=180s
           kubectl -n istio-system rollout status daemonset/istio-cni-node --timeout=180s
+          kubectl -n istio-system rollout status daemonset/ztunnel   --timeout=600s
 
       - name: Apply Bookinfo
         run: |
           kubectl apply -f manifests/bookinfo.yaml
-          kubectl wait --for=condition=Ready pod -l app=productpage --timeout=120s
-          kubectl wait --for=condition=Ready pod -l app=details     --timeout=120s
-          kubectl wait --for=condition=Ready pod -l app=reviews     --timeout=120s
-          kubectl wait --for=condition=Ready pod -l app=ratings     --timeout=120s
+          kubectl wait --for=condition=Ready pod -l app=productpage --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app=details     --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app=reviews     --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app=ratings     --timeout=180s
 
       - name: Enroll namespace in ambient mode
-        run: kubectl label namespace default istio.io/dataplane-mode=ambient
+        run: kubectl label namespace default istio.io/dataplane-mode=ambient --overwrite
 
       - name: Apply gateway and waypoint
         run: |
@@ -120,6 +138,24 @@ jobs:
             exit 1
           fi
           echo "✅ ztunnel sees the Bookinfo workloads"
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          echo "=== ztunnel pods ==="
+          kubectl -n istio-system get pods -l app=ztunnel -o wide || true
+          echo "=== ztunnel describe ==="
+          kubectl -n istio-system describe pods -l app=ztunnel || true
+          echo "=== ztunnel logs ==="
+          kubectl -n istio-system logs -l app=ztunnel --tail=100 --prefix || true
+          echo "=== istiod pods ==="
+          kubectl -n istio-system get pods -l app=istiod -o wide || true
+          echo "=== CNI pods ==="
+          kubectl -n istio-system get pods -l app=istio-cni-node -o wide || true
+          echo "=== events ==="
+          kubectl -n istio-system get events --sort-by=.lastTimestamp || true
+          echo "=== node resources ==="
+          kubectl top nodes || true
 
       - name: Cleanup
         if: always()
