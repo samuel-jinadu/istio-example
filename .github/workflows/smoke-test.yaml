@@ -58,7 +58,7 @@ jobs:
         run: |
           istioctl install --set profile=ambient \
             --set values.cni.cniConfDir=/var/lib/rancher/k3s/agent/etc/cni/net.d \
-            --set values.cni.cniBinDir=/bin \
+            --set values.cni.cniBinDir=/var/lib/rancher/k3s/data/cni \
             --skip-confirmation \
             --readiness-timeout 10m
 
